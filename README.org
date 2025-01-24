@@ -1,0 +1,307 @@
+#+title: Local k8s testing
+#+author: Ian Kenney
+
+* Tooling
+
+- Docker (package manager)
+- kubectl (package manager)
+- kind (github release)
+
+* Quickstart
+** Downloading tools and environment setup
+
+Download the =kind= release and make it executable
+
+#+begin_src shell :results none
+  mkdir bin/
+  wget "https://github.com/kubernetes-sigs/kind/releases/download/v0.26.0/kind-linux-amd64" -O bin/kind
+  chmod +x bin/kind
+#+end_src
+
+Installation/setup of docker and kubectl is out of scope of this document.
+
+** Managing clusters
+*** Creating
+
+You can create a kind cluster with the default name of "kind" with:
+
+#+begin_src bash :results output
+  bin/kind create cluster  2>&1
+#+end_src
+
+#+RESULTS:
+#+begin_example
+Creating cluster "kind" ...
+ • Ensuring node image (kindest/node:v1.32.0) 🖼  ...
+ ✓ Ensuring node image (kindest/node:v1.32.0) 🖼
+ • Preparing nodes 📦   ...
+ ✓ Preparing nodes 📦 
+ • Writing configuration 📜  ...
+ ✓ Writing configuration 📜
+ • Starting control-plane 🕹️  ...
+ ✓ Starting control-plane 🕹️
+ • Installing CNI 🔌  ...
+ ✓ Installing CNI 🔌
+ • Installing StorageClass 💾  ...
+ ✓ Installing StorageClass 💾
+Set kubectl context to "kind-kind"
+You can now use your cluster with:
+
+kubectl cluster-info --context kind-kind
+
+Have a question, bug, or feature request? Let us know! https://kind.sigs.k8s.io/#community 🙂
+#+end_example
+
+Or with a specific name:
+
+#+begin_src bash :results output
+  bin/kind create cluster --name kind-2  2>&1
+#+end_src
+
+#+RESULTS:
+#+begin_example
+Creating cluster "kind-2" ...
+ • Ensuring node image (kindest/node:v1.32.0) 🖼  ...
+ ✓ Ensuring node image (kindest/node:v1.32.0) 🖼
+ • Preparing nodes 📦   ...
+ ✓ Preparing nodes 📦 
+ • Writing configuration 📜  ...
+ ✓ Writing configuration 📜
+ • Starting control-plane 🕹️  ...
+ ✓ Starting control-plane 🕹️
+ • Installing CNI 🔌  ...
+ ✓ Installing CNI 🔌
+ • Installing StorageClass 💾  ...
+ ✓ Installing StorageClass 💾
+Set kubectl context to "kind-kind-2"
+You can now use your cluster with:
+
+kubectl cluster-info --context kind-kind-2
+
+Not sure what to do next? 😅  Check out https://kind.sigs.k8s.io/docs/user/quick-start/
+#+end_example
+
+This results in two control planes
+
+#+begin_src bash :results output :wrap example
+  bin/kind get clusters
+#+end_src
+
+#+RESULTS:
+#+begin_example
+kind
+kind-2
+#+end_example
+
+Which is reflected by docker
+
+#+begin_src bash :results output :wrap example
+  docker ps
+#+end_src
+
+#+RESULTS:
+#+begin_example
+CONTAINER ID   IMAGE                  COMMAND                  CREATED          STATUS          PORTS                       NAMES
+2a01ac34ea57   kindest/node:v1.32.0   "/usr/local/bin/entr…"   7 minutes ago    Up 7 minutes    127.0.0.1:33359->6443/tcp   kind-2-control-plane
+9c78a6ed1c48   kindest/node:v1.32.0   "/usr/local/bin/entr…"   10 minutes ago   Up 10 minutes   127.0.0.1:33643->6443/tcp   kind-control-plane
+#+end_example
+
+From here we can use kubectl to interact with the deployed clusters
+
+#+begin_src bash :results output
+  kubectl cluster-info --context kind-kind
+  echo -e "\n--------------------\n"
+  kubectl cluster-info --context kind-kind-2
+#+end_src
+
+#+RESULTS:
+#+begin_example
+Kubernetes control plane is running at https://127.0.0.1:33643
+CoreDNS is running at https://127.0.0.1:33643/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy
+
+To further debug and diagnose cluster problems, use 'kubectl cluster-info dump'.
+
+--------------------
+
+Kubernetes control plane is running at https://127.0.0.1:33359
+CoreDNS is running at https://127.0.0.1:33359/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy
+
+To further debug and diagnose cluster problems, use 'kubectl cluster-info dump'.
+#+end_example
+
+*** Deleting
+
+Clusters can be deleted using
+
+#+begin_src bash :results output
+  bin/kind delete cluster  2>&1
+  bin/kind delete cluster --name kind-2  2>&1
+#+end_src
+
+#+RESULTS:
+: Deleting cluster "kind" ...
+: Deleting cluster "kind-2" ...
+
+* Deploying applications
+** Alchemiscale k8s
+
+This repository includes an =alchemiscale-k8s= submodule under =lib/=
+which we'll use as an example deployment. Before continuing, ensure
+that the repository's submodules are updated.
+
+#+begin_src bash
+  git submodule update --init --recursive
+#+end_src
+
+#+RESULTS:
+
+#+begin_src yaml :tangle cpw.yaml :eval never
+  # three node (two workers) cluster config
+  kind: Cluster
+  apiVersion: kind.x-k8s.io/v1alpha4
+  nodes:
+  - role: control-plane
+  - role: worker
+    labels:
+      type: database    
+#+end_src
+
+Create a new cluster and wait up to 60 seconds for the control plane to be ready:
+
+#+begin_src bash results: none
+  bin/kind create cluster --name alk8s --wait 60s --config cpw.yaml
+#+end_src
+
+#+RESULTS:
+
+Check that the cluster exists
+
+#+begin_src bash 
+  bin/kind get clusters
+#+end_src
+
+#+RESULTS:
+: alk8s
+
+Check that kubectl can access the cluster
+
+#+begin_src bash :wrap example :results output
+  kubectl cluster-info --context kind-alk8s
+#+end_src
+
+#+RESULTS:
+#+begin_example
+Kubernetes control plane is running at https://127.0.0.1:37543
+CoreDNS is running at https://127.0.0.1:37543/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy
+
+To further debug and diagnose cluster problems, use 'kubectl cluster-info dump'.
+#+end_example
+
+#+begin_src bash
+  kubectl apply -f lib/alchemiscale-k8s/server/alchemiscale-namespace.yaml
+#+end_src
+
+#+RESULTS:
+: namespace/alchemiscale created
+
+Secrets need to be modified.
+
+#+begin_src bash :results output
+    #!/bin/bash
+
+  kubectl -n alchemiscale delete secret alchemiscale-neo4j-secrets 
+  kubectl -n alchemiscale delete secret alchemiscale-aws-secrets 
+  kubectl -n alchemiscale delete secret alchemiscale-jwt-secrets 
+
+  # neo4j
+  NEO4J_USER="neo4j"  # for Neo4j community edition, must be `neo4j`
+  NEO4J_PASS="password"       # choose a password for your Neo4j instance
+  kubectl -n alchemiscale create secret generic alchemiscale-neo4j-secrets --from-literal="NEO4J_USER=$NEO4J_USER" \
+                                                           --from-literal="NEO4J_PASS=$NEO4J_PASS" \
+                                                           --from-literal="NEO4J_AUTH=neo4j/password"
+
+  # aws
+  ## AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY only needed if API services are being deployed outside of AWS
+  ## or on AWS resources without IAM role-based access to S3
+  AWS_ACCESS_KEY_ID="hello"
+  AWS_SECRET_ACCESS_KEY="hello"
+
+  ## required for object store
+  AWS_S3_BUCKET="local"       # name of bucket, not its ARN
+  AWS_S3_PREFIX="local"       # prefix within the bucket to use, if desired
+  AWS_DEFAULT_REGION="north"  # region the bucket resides in
+  kubectl -n alchemiscale create secret generic alchemiscale-aws-secrets --from-literal="AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID" \
+                                                         --from-literal="AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY" \
+                                                         --from-literal="AWS_S3_BUCKET=$AWS_S3_BUCKET" \
+                                                         --from-literal="AWS_S3_PREFIX=$AWS_S3_PREFIX" \
+                                                         --from-literal="AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION"
+  # jwt
+  JWT_SECRET_KEY=`python3 -c "import secrets; print(secrets.token_hex(32))"`
+  kubectl -n alchemiscale create secret generic alchemiscale-jwt-secrets --from-literal="JWT_SECRET_KEY=$JWT_SECRET_KEY"
+#+end_src
+
+#+RESULTS:
+: secret/alchemiscale-neo4j-secrets created
+: secret/alchemiscale-aws-secrets created
+: secret/alchemiscale-jwt-secrets created
+
+#+begin_src bash
+  kubectl --context kind-alk8s apply -f lib/alchemiscale-k8s/server/alchemiscale-configmap.yaml
+#+end_src
+
+#+RESULTS:
+: configmap/alchemiscale-configmap created
+
+#+begin_src  bash
+  kubectl --context kind-alk8s apply -f lib/alchemiscale-k8s/server/neo4j-statefulset.yaml
+#+end_src
+
+#+RESULTS:
+| persistentvolume/alchemiscale-neo4j-data            | created |
+| persistentvolumeclaim/alchemiscale-neo4j-data-claim | created |
+| statefulset.apps/alchemiscale-neo4j                 | created |
+| service/alchemiscale-neo4j-service                  | created |
+
+
+#+begin_src  bash
+  kubectl --context kind-alk8s apply -f "lib/alchemiscale-k8s/server/*api-deployment.yaml"
+#+end_src
+
+#+RESULTS:
+| deployment.apps/alchemiscale-clientapi  | created |
+| service/alchemiscale-clientapi-service  | created |
+| deployment.apps/alchemiscale-computeapi | created |
+| service/alchemiscale-computeapi-service | created |
+
+#+begin_src bash :results output
+  kubectl -n alchemiscale get pods
+#+end_src
+
+#+RESULTS:
+: NAME                                       READY   STATUS    RESTARTS   AGE
+: alchemiscale-clientapi-8f9b6c7fd-nx9lq     1/1     Running   0          102s
+: alchemiscale-computeapi-56478f854f-jv5zf   1/1     Running   0          102s
+: alchemiscale-neo4j-0                       1/1     Running   0          4m53s
+
+#+begin_src bash
+  kubectl --context kind-alk8s apply -f lib/alchemiscale-k8s/server/alchemiscale-ingress.yaml
+#+end_src
+
+#+RESULTS:
+: ingress.networking.k8s.io/alchemiscale-ingress created
+
+#+begin_src bash :results none
+  TARGET_CONTAINER=`kubectl --context kind-alk8s -n alchemiscale get pods | grep -oP "alchemiscale-clientapi-[a-zA-Z0-9]+-[a-zA-Z0-9]+"`
+  kubectl exec -it -n alchemiscale $TARGET_CONTAINER -- /opt/conda/bin/alchemiscale identity add -t user -i ikenney -k pass
+  kubectl exec -it -n alchemiscale $TARGET_CONTAINER -- /opt/conda/bin/alchemiscale identity add -t compute -i ikenney -k pass
+#+end_src
+
+#+RESULTS:
+: alchemiscale-clientapi-8f9b6c7fd-nc5qw
+
+Need to connect to the clientapi service. Workaround until ingress
+works.
+
+#+begin_src bash :eval never
+  kubectl port-forward -n alchemiscale services/alchemiscale-clientapi-service 1840:1840
+#+end_src
